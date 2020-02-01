@@ -1,0 +1,232 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "John Moses"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+## Data Prep
+Load packages and training and test data
+
+```{r Data prep, echo=TRUE}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+library(corrplot)
+library(gbm)
+library(e1071)
+
+# URL for the download
+UrlTrain <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+UrlTest  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+#read cvs files to dataframes
+dat_training <- read.csv(url(UrlTrain))
+dat_testing  <- read.csv(url(UrlTest))
+
+#examine data
+dim(dat_training)
+dim(dat_testing)
+
+
+```
+There are 19,622 observations and 160 variables in the training data set.
+
+## Cleaning Data
+
+Remove variables that are zero or contain missing values. 
+
+```{r Clean Data, echo=TRUE}
+dat1_training <- dat_training[, colSums(is.na(dat_training)) == 0]
+dat1_testing <- dat_testing[, colSums(is.na(dat_testing))==0]
+dim(dat1_training)
+dim(dat1_testing)
+
+```
+
+The first seven variables have no impact on the analysis, so they are removed.
+
+```{r}
+#examine first seven variables
+head(dat1_training[,1:7])
+
+#remove first seven variables
+dat1_training <- dat1_training[, -c(1:7)]
+dat1_testing <- dat1_testing[, -c(1:7)]
+
+dim(dat1_training)
+dim(dat1_testing)
+
+```
+
+## Data Prep for Predictions
+
+Training data will be split 70% for training and 30% for testing. The split will be used to calculate out-of-sample errors. 
+
+```{r Data Prep Prediction, echo=TRUE}
+set.seed(47)
+
+dat2_train <- createDataPartition(dat1_training$classe, p=0.7, list=FALSE)
+train_dat <- dat1_training[dat2_train,]
+test_dat <- dat1_training[-dat2_train,]
+
+dim(train_dat)
+dim(test_dat)
+
+
+```
+
+
+# Remove Variables with Near-Zero-Variance
+```{r remove NZV, echo = TRUE}
+nzv <- nearZeroVar(train_dat)
+train_dat <- train_dat[, -nzv]
+test_dat <- test_dat[, -nzv]
+
+dim(train_dat)
+dim(test_dat)
+
+```
+
+Post-data cleaning, the data is now down to 49 variables.
+
+Correlation plot will be used to find correlated predictors
+
+``` {r corr plot, echo = TRUE}
+cor_matrix <- cor(train_dat[, -53])
+corrplot(cor_matrix, order = "FPC", method = "color", type = "upper", 
+         tl.cex = 0.8, tl.col = rgb(0, 0, 0))
+
+
+
+```
+
+Locate the names of the highly correlated variables using the findCorrelation function.
+
+``` {r findCor, echo=TRUE}
+high_corr <- findCorrelation(cor_matrix, cutoff = 0.75)
+
+#Names of high correlated variables
+names(train_dat[high_corr])
+```
+
+
+
+
+## Model Building
+
+Classification tree and random forest will be used to predict outcome.
+
+
+# Classification Tree Prediction
+
+``` {r Tree Prediction, echo = TRUE}
+set.seed(47)
+decisionTree.1 <- rpart(classe ~ ., data=train_dat, method = "class")
+fancyRpartPlot(decisionTree.1)
+```
+
+Validate on test_dat data
+
+```{r validate, echo = TRUE}
+predictTree.1 <- predict(decisionTree.1, test_dat, type = "class")
+cmtree <- confusionMatrix(predictTree.1, test_dat$classe)
+cmtree
+
+
+```
+
+
+Plot of Matrix Results
+```{r Matrix Results, echo=TRUE}
+# plot matrix results
+plot(cmtree$table, col = cmtree$byClass, 
+     main = paste("Decision Tree - Accuracy =", round(cmtree$overall['Accuracy'], 4)))
+```
+
+Accuracy rate is 0.746. Out-of-sample rate is about 0.25.
+
+## Random Forest Model
+
+``` {r RF, echo=TRUE}
+controlRF <- trainControl(method="cv", number=3, verboseIter = FALSE)
+modelRF.1 <- train(classe ~ ., data=train_dat, method ="rf", trControl=controlRF)
+modelRF.1$finalModel
+```
+
+Validate on the test_dat data
+
+```{r validate RF, echo=TRUE}
+predictRF <- predict(modelRF.1, newdata = test_dat)
+cmrf <- confusionMatrix(predictRF, test_dat$classe)
+cmrf
+
+```
+
+Accuracy is high, 0.9939, out of sample error 0.0061
+
+Plot of the Random Forest model
+
+``` {r RF plot, echo=TRUE}
+plot(modelRF.1)
+
+
+plot(cmrf$table, col = cmrf$byClass, main = paste("Random Forest Confusion Matrix: Accuracy =", round(cmrf$overall['Accuracy'], 4)))
+```
+
+## Generalized Boost Regression
+
+``` {r GBR, echo=TRUE}
+set.seed(47)
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modGBM  <- train(classe ~ ., data=train_dat, method = "gbm", trControl = controlGBM, verbose = FALSE)
+modGBM$finalModel
+
+print(modGBM)
+```
+
+Validate Generalized Boost Model
+
+```{r validate GBR, echo=TRUE}
+predictGBM <- predict(modGBM, newdata=test_dat)
+cmGBM <- confusionMatrix(predictGBM, test_dat$classe)
+cmGBM
+
+```
+
+Accuracy for Generalize Boost Regression Model is0.9658. Out-of-sample error is 0.0342.
+
+## BEST MODEL
+
+Random Forest model has the highest accuracy, and will be used for the test data set. 
+
+``` {r best model for test data, echo=TRUE}
+results <- predict(modelRF.1, newdata = dat1_testing)
+results
+
+```
+
+
+
+
+
